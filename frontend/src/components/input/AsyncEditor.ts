@@ -1,5 +1,3 @@
-import {createAsyncComponent} from '@/helpers/createAsyncComponent'
+import SmartEditor from '@/components/input/editor/SmartEditor.vue'
 
-const TipTap = createAsyncComponent(() => import('@/components/input/editor/TipTap.vue'))
-
-export default TipTap
+export default SmartEditor
