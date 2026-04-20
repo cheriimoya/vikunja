@@ -348,6 +348,18 @@
 					>
 				</label>
 			</div>
+			<div class="field">
+				<label class="checkbox">
+					<input
+						v-model="settings.frontendSettings.useMarkdownEditor"
+						type="checkbox"
+					>
+					{{ $t('user.settings.general.useMarkdownEditor') }}
+				</label>
+				<p class="help">
+					{{ $t('user.settings.general.useMarkdownEditorHint') }}
+				</p>
+			</div>
 		</div>
 	</Card>
 

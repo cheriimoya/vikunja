@@ -26,6 +26,7 @@ export interface IFrontendSettings {
 	sidebarWidth: number | null
 	commentSortOrder: 'asc' | 'desc'
 	desktopQuickEntryShortcut: string
+	useMarkdownEditor: boolean
 }
 
 export interface IExtraSettingsLink {
