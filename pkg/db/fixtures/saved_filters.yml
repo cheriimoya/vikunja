@@ -4,3 +4,9 @@
   owner_id: 1
   updated: 2020-09-08 15:13:12
   created: 2020-09-08 14:13:12
+- id: 2
+  filters: '{"filter":"done = false","filter_include_nulls":false}'
+  title: caldav filter for user15
+  owner_id: 15
+  updated: 2020-09-08 15:13:12
+  created: 2020-09-08 14:13:12

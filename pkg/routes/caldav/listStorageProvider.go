@@ -112,7 +112,7 @@ func (vcls *VikunjaCaldavProjectStorage) GetResources(rpath string, withChildren
 						task:         &vcls.project.Tasks[i].Task,
 						isCollection: false,
 					}
-					addTaskResource(&vcls.project.Tasks[i].Task, &taskResource, &resources)
+					addTaskResource(&vcls.project.Tasks[i].Task, &taskResource, &resources, vcls.project.ID)
 				}
 			}
 			return resources, nil
@@ -223,15 +223,22 @@ func (vcls *VikunjaCaldavProjectStorage) GetResourcesByList(rpaths []string) (re
 	}
 
 	for _, t := range tasks {
+		urlProjectID, ok := uidURLProjects[t.UID]
+		if !ok {
+			urlProjectID = t.ProjectID
+		}
 		// Closes the URL-path leak for calendar-multiget REPORTs
-		// (GHSA-48ch-p4gq-x46x).
-		if urlProjectID, ok := uidURLProjects[t.UID]; ok && urlProjectID != t.ProjectID {
+		// (GHSA-48ch-p4gq-x46x): a real-project URL may only address its own
+		// tasks. Saved-filter collections legitimately aggregate tasks from
+		// other projects; GetTasksByUIDs already scoped the result to projects
+		// the user may access, so serving them under the filter path is safe.
+		if ok && urlProjectID != t.ProjectID && !isSavedFilterProjectID(urlProjectID) {
 			continue
 		}
 		rr := VikunjaProjectResourceAdapter{
 			task: t,
 		}
-		addTaskResource(t, &rr, &resources)
+		addTaskResource(t, &rr, &resources, urlProjectID)
 	}
 
 	return
@@ -251,7 +258,7 @@ func (vcls *VikunjaCaldavProjectStorage) GetResourcesByFilters(rpath string, _ *
 				task:         &vcls.project.Tasks[i].Task,
 				isCollection: false,
 			}
-			r := data.NewResource(getTaskURL(&vcls.project.Tasks[i].Task), &rr)
+			r := data.NewResource(taskURLInCollection(&vcls.project.Tasks[i].Task, vcls.project.ID), &rr)
 			r.Name = vcls.project.Tasks[i].Title
 			resources = append(resources, r)
 		}
@@ -270,8 +277,22 @@ func (vcls *VikunjaCaldavProjectStorage) GetResourcesByFilters(rpath string, _ *
 	// return vcls.GetResources(rpath, false)
 }
 
-func getTaskURL(task *models.Task) string {
-	return ProjectBasePath + "/" + strconv.FormatInt(task.ProjectID, 10) + `/` + task.UID + `.ics`
+// isSavedFilterProjectID reports whether a project id refers to a saved-filter
+// pseudo-project. Those live below the favorites pseudo-project id.
+func isSavedFilterProjectID(id int64) bool {
+	return id < models.FavoritesPseudoProjectID
+}
+
+// taskURLInCollection addresses a task under the collection it is served from.
+// A saved-filter collection aggregates tasks from many real projects, so we keep
+// the filter's (negative) project id in the href to keep the collection
+// self-consistent; for real projects the task's own project id is used.
+func taskURLInCollection(task *models.Task, collectionProjectID int64) string {
+	projectID := task.ProjectID
+	if isSavedFilterProjectID(collectionProjectID) {
+		projectID = collectionProjectID
+	}
+	return ProjectBasePath + "/" + strconv.FormatInt(projectID, 10) + `/` + task.UID + `.ics`
 }
 
 // GetResource fetches a single resource
@@ -303,8 +324,12 @@ func (vcls *VikunjaCaldavProjectStorage) GetResource(rpath string) (*data.Resour
 
 		// Reject reads where the URL project (set by TaskHandler in handler.go
 		// from the :project param) doesn't match the task's real project
-		// (GHSA-48ch-p4gq-x46x).
-		if vcls.project != nil && vcls.project.ID != 0 && vcls.task.ProjectID != vcls.project.ID {
+		// (GHSA-48ch-p4gq-x46x). Saved-filter collections deliberately aggregate
+		// tasks from other projects, so this equality is not expected there; the
+		// preceding GetTasksByUIDs already scoped the task to the user's access.
+		if vcls.project != nil && vcls.project.ID != 0 &&
+			!isSavedFilterProjectID(vcls.project.ID) &&
+			vcls.task.ProjectID != vcls.project.ID {
 			return nil, false, errs.ResourceNotFoundError
 		}
 
@@ -342,6 +367,14 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 
 	s := db.NewSession()
 	defer s.Close()
+
+	// A saved-filter collection has no single target project, so creating a new
+	// task in it is ambiguous. Reject it explicitly instead of trying to create
+	// a task in the (non-existent) negative pseudo-project.
+	if isSavedFilterProjectID(vcls.project.ID) {
+		log.Warningf("[CALDAV] User %s tried to create a task in saved-filter collection %d", vcls.user.Username, vcls.project.ID)
+		return nil, errs.ForbiddenError
+	}
 
 	vTask, err := caldav.ParseTaskFromVTODO(content)
 	if err != nil {
@@ -420,9 +453,15 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	// At this point, we already have the right task in vcls.task, so we can use that ID directly
 	vTask.ID = vcls.task.ID
 
-	// Explicitly set the ProjectID in case the task now belongs to a different project:
-	vTask.ProjectID = vcls.project.ID
-	vcls.task.ProjectID = vcls.project.ID
+	// Explicitly set the ProjectID in case the task now belongs to a different project.
+	// For a saved-filter collection the URL "project" is the filter pseudo-project,
+	// so keep the task in its existing real project instead of moving it there.
+	targetProjectID := vcls.project.ID
+	if isSavedFilterProjectID(targetProjectID) {
+		targetProjectID = vcls.task.ProjectID
+	}
+	vTask.ProjectID = targetProjectID
+	vcls.task.ProjectID = targetProjectID
 
 	s := db.NewSession()
 	defer s.Close()
@@ -801,8 +840,8 @@ func (vcls *VikunjaCaldavProjectStorage) getProjectRessource(isCollection bool) 
 	return
 }
 
-func addTaskResource(task *models.Task, rr *VikunjaProjectResourceAdapter, resources *[]data.Resource) {
-	taskResourceInstance := data.NewResource(getTaskURL(task), rr)
+func addTaskResource(task *models.Task, rr *VikunjaProjectResourceAdapter, resources *[]data.Resource, collectionProjectID int64) {
+	taskResourceInstance := data.NewResource(taskURLInCollection(task, collectionProjectID), rr)
 	taskResourceInstance.Name = task.Title
 	*resources = append(*resources, taskResourceInstance)
 }
