@@ -27,6 +27,7 @@ import (
 	"strings"
 	"testing"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/license"
 	"code.vikunja.io/api/pkg/models"
@@ -262,6 +263,9 @@ func TestCanReadCollection_InstanceAdmin(t *testing.T) {
 // The reduced Allow header must keep advertising PUT and DELETE for pseudo collections,
 // without turning OPTIONS into an oracle for collections the user cannot read.
 func TestProjectHandlerOPTIONS(t *testing.T) {
+	config.ServiceEnableCaldavPseudoProjects.Set(true)
+	defer config.ServiceEnableCaldavPseudoProjects.Set(false)
+
 	options := func(t *testing.T, u *user.User, projectID int64) *httptest.ResponseRecorder {
 		t.Helper()
 
